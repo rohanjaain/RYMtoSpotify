@@ -37,7 +37,7 @@ var AuthParameters = {
 
 initSpotifyToken();
 
-RYM_URL = "https://rateyourmusic.com/list/thicccc/growing-up-in-the-scene-indie-surf-bands-in-southern-california-from-the-early_mid-2010s-people-listened-to/"
+RYM_URL = "https://rateyourmusic.com/list/stapple/deep-fried-and-heavily-artifacted-covers/"
 if (/^(www\.)?rateyourmusic\.com\/list/.test(RYM_URL)){
     RYM_URL = "https://" + RYM_URL;
 }
@@ -133,7 +133,8 @@ async function fullRequest() {
     excluded = [];
     updatedSongsAlbumsArtists = [];
     songsOrAlbums = await halfRequest();
-    console.log(util.inspect(songsOrAlbums, false, null, true));
+    //console.log(util.inspect(songsOrAlbums, false, null, true));
+    console.log(songsOrAlbums);
 }  
 
 async function searchAlbums(search_parameter){
@@ -149,7 +150,9 @@ async function searchAlbums(search_parameter){
           albumId: object.id,
           href: object.external_urls.spotify,
           artists: extractArtists,
-          imageURL: object.images[0].url
+          imageURL: object.images && object.images.length > 0
+              ? object.images[0].url
+              : undefined
         });
       }
       return return_albums;
@@ -159,10 +162,8 @@ async function searchAlbums(search_parameter){
 async function searchArtistsAndGetTopTracks(search_parameter){
     return spotifyApi.searchArtists(search_parameter, {limit: 3}).then(async (result) => {
       let return_artist = [];
-      console.log(result.body.artists.items[0])
       for (index in result.body.artists.items){
         currArtist = result.body.artists.items[index]
-        console.log(currArtist)
         let extractTopFive = await getArtistTopTracks(currArtist.id)
         return_artist.push({
             artistName: currArtist.name,
@@ -190,7 +191,10 @@ async function getArtistTopTracks(artistID){
             songName: object.name,
             songId: object.id,
             href: object.external_urls.spotify,
-            artists: extractArtists
+            artists: extractArtists,
+            imageURL: object.album.images && object.album.images.length > 0
+              ? object.album.images[0].url
+              : undefined
         });
       }
       return return_tracks;
@@ -211,7 +215,10 @@ async function searchTracks(search_parameter){
           trackName: object.name,
           trackId: object.id,
           href: object.external_urls.spotify,
-          artists: extractArtists
+          artists: extractArtists,
+          imageURL: object.album.images && object.album.images.length > 0
+              ? object.album.images[0].url
+              : undefined
         });
       }
       return return_tracks;
