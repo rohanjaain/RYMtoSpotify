@@ -2,13 +2,97 @@ const request = require('request');
 const cheerio = require('cheerio');
 const spotifyWebAPI = require('spotify-web-api-node');
 const util = require('util');
-//import { initSpotifyToken } from './spotifyFunctions.js';
+const express = require('express')
+require('dotenv').config();
+const SPOTIFY_CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
+const SPOTIFY_CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
+
+const app = express();
+
+const scopes = [
+  'ugc-image-upload',
+  // 'user-read-playback-state',
+  // 'user-modify-playback-state',
+  // 'user-read-currently-playing',
+  // 'streaming',
+  // 'app-remote-control',
+  'user-read-email',
+  'user-read-private',
+  'playlist-read-collaborative',
+  'playlist-modify-public',
+  'playlist-read-private',
+  'playlist-modify-private',
+  'user-library-modify',
+  'user-library-read'
+  // 'user-top-read',
+  // 'user-read-playback-position',
+  // 'user-read-recently-played',
+  // 'user-follow-read',
+  // 'user-follow-modify'
+];
 
  var spotifyApi = new spotifyWebAPI({
-    clientId: '3dc94d80ed874a2b9c244bfefecb0f20',
-    clientSecret: '9e1a82bbec4b4f8b9881a53445d29f1b',
-    callbackURI: 'http://localhost:8888/callback'
+    clientId: SPOTIFY_CLIENT_ID,
+    clientSecret: SPOTIFY_CLIENT_SECRET,
+    redirectUri: 'http://localhost:8888/callback'
 });
+
+app.get('/login', (req, res) => {
+  res.redirect(spotifyApi.createAuthorizeURL(scopes));
+});
+
+app.get('/callback', (req, res) => {
+  const error = req.query.error;
+  const code = req.query.code;
+  const state = req.query.state;
+
+  if (error) {
+    console.error('Callback Error:', error);
+    res.send(`Callback Error: ${error}`);
+    return;
+  }
+
+  spotifyApi
+    .authorizationCodeGrant(code)
+    .then(data => {
+      const access_token = data.body['access_token'];
+      const refresh_token = data.body['refresh_token'];
+      const expires_in = data.body['expires_in'];
+
+      spotifyApi.setAccessToken(access_token);
+      spotifyApi.setRefreshToken(refresh_token);
+
+      console.log('access_token:', access_token);
+      console.log('refresh_token:', refresh_token);
+
+      console.log(
+        `Sucessfully retreived access token. Expires in ${expires_in} s.`
+      );
+      res.send('Success! You can now close the window.');
+
+      setInterval(async () => {
+        const data = await spotifyApi.refreshAccessToken();
+        const access_token = data.body['access_token'];
+
+        console.log('The access token has been refreshed!');
+        console.log('access_token:', access_token);
+        spotifyApi.setAccessToken(access_token);
+      }, expires_in / 2 * 1000);
+
+      fullRequest();
+    })
+    .catch(error => {
+      console.error('Error getting Tokens:', error);
+      res.send(`Error getting Tokens: ${error}`);
+    });
+});
+
+app.listen(8888, () =>
+  console.log(
+    'HTTP Server up. Now go to http://localhost:8888/login in your browser.'
+  )
+);
+
 
 // Now you can use the initSpotifyToken function in this file
 var AuthParameters = {
@@ -16,7 +100,7 @@ var AuthParameters = {
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded'
     },
-    body:'grant_type=client_credentials&client_id=' + "3dc94d80ed874a2b9c244bfefecb0f20" + '&client_secret=' + "9e1a82bbec4b4f8b9881a53445d29f1b"
+    body:'grant_type=client_credentials&client_id=' + SPOTIFY_CLIENT_ID + '&client_secret=' + SPOTIFY_CLIENT_SECRET
   }
   
  let accessToken = null
@@ -37,7 +121,7 @@ var AuthParameters = {
 
 initSpotifyToken();
 
-RYM_URL = "https://rateyourmusic.com/list/stapple/deep-fried-and-heavily-artifacted-covers/"
+RYM_URL = "https://rateyourmusic.com/list/PsychedelicSquirrel/good-indie/"
 if (/^(www\.)?rateyourmusic\.com\/list/.test(RYM_URL)){
     RYM_URL = "https://" + RYM_URL;
 }
@@ -52,8 +136,6 @@ const options = {
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36'
     }
 };
-
-fullRequest();
 
 async function halfRequest() {
     return new Promise((resolve, reject) => {
@@ -77,6 +159,7 @@ async function halfRequest() {
                 if(albumOrSingleName != '' && releaseDate != ''){
                     if (/((Video)|(Bootleg)|(Unauthorized)|(DJ\ Mix))/.test(releaseDate)){
                         type = 'Video/Bootleg/Unauthorized/DJ Mix'
+                        continue
                     //if it is a Single
                     } if (/Single/.test(releaseDate)) {
                         data = []
@@ -133,9 +216,46 @@ async function fullRequest() {
     excluded = [];
     updatedSongsAlbumsArtists = [];
     songsOrAlbums = await halfRequest();
-    //console.log(util.inspect(songsOrAlbums, false, null, true));
-    console.log(songsOrAlbums);
-}  
+    console.log(util.inspect(songsOrAlbums, false, null, true));
+    await createPlaylist(songsOrAlbums)
+}
+
+async function createPlaylist(songsOrAlbums){
+  console.log(songsOrAlbums)
+  let result = await spotifyApi.createPlaylist('Good indie')
+  // console.log(result)
+  // get the playlist id from the result
+  let playlistId = result.body.id
+  console.log(playlistId)
+  for (let thing of songsOrAlbums){
+    console.log("======================")
+    console.log(thing)
+    if(thing.type == 'EP' || thing.type == 'Album'| thing.type == 'Mixtape'){
+      let albumobject = await spotifyApi.getAlbumTracks(thing.data.spotifyObjects[0].albumId)
+      //deduce albumtracks
+      let albumtracks = []
+      for(let album_track of albumobject.body.items){
+        albumtracks.push("spotify:track:" + album_track.id)
+      }
+      console.log(albumtracks)
+      await spotifyApi.addTracksToPlaylist(playlistId, albumtracks)
+    } else if (thing.type == 'Single') {
+      let singletracks = []
+      for(let track of thing.data){
+        singletracks.push("spotify:track:" + track.spotifyObjects[0].trackId)
+      }
+      console.log(singletracks)
+      await spotifyApi.addTracksToPlaylist(playlistId, singletracks)
+    } else if (thing.type == 'artist') {
+      let artisttracks = []
+      for(let artist_track of thing.data.spotifyObjects[0].topSongs){
+        artisttracks.push("spotify:track:" + artist_track.songId)
+      }
+      console.log(artisttracks)
+      await spotifyApi.addTracksToPlaylist(playlistId, artisttracks)
+    }
+  }
+}
 
 async function searchAlbums(search_parameter){
     return spotifyApi.searchAlbums(search_parameter, {limit: 5}).then((result) => {
@@ -162,8 +282,7 @@ async function searchAlbums(search_parameter){
 async function searchArtistsAndGetTopTracks(search_parameter){
     return spotifyApi.searchArtists(search_parameter, {limit: 3}).then(async (result) => {
       let return_artist = [];
-      for (index in result.body.artists.items){
-        currArtist = result.body.artists.items[index]
+      for (let currArtist of result.body.artists.items){
         let extractTopFive = await getArtistTopTracks(currArtist.id)
         return_artist.push({
             artistName: currArtist.name,
@@ -172,7 +291,7 @@ async function searchArtistsAndGetTopTracks(search_parameter){
             imageURL: currArtist.images && currArtist.images.length > 0
               ? currArtist.images[0].url
               : undefined,
-            topSongs: extractTopFive,
+            topSongs: extractTopFive
         });
       }
       return return_artist;
@@ -201,8 +320,6 @@ async function getArtistTopTracks(artistID){
     });
 }
 
-
-//FIXME: right now it is not getting the tracks
 async function searchTracks(search_parameter){
     return spotifyApi.searchTracks(search_parameter, {limit: 5}).then((result) => {
       let return_tracks = [];
