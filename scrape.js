@@ -2,12 +2,14 @@ const request = require('request');
 const cheerio = require('cheerio');
 const spotifyWebAPI = require('spotify-web-api-node');
 const util = require('util');
-const express = require('express')
+const express = require('express');
 require('dotenv').config();
 const SPOTIFY_CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
 const SPOTIFY_CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
 
 const app = express();
+
+RYM_URL = 'https://rateyourmusic.com/list/mattbennett/buried-treasure/'
 
 const scopes = [
   'ugc-image-upload',
@@ -31,7 +33,7 @@ const scopes = [
   // 'user-follow-modify'
 ];
 
- var spotifyApi = new spotifyWebAPI({
+var spotifyApi = new spotifyWebAPI({
     clientId: SPOTIFY_CLIENT_ID,
     clientSecret: SPOTIFY_CLIENT_SECRET,
     redirectUri: 'http://localhost:8888/callback'
@@ -40,6 +42,7 @@ const scopes = [
 app.get('/login', (req, res) => {
   res.redirect(spotifyApi.createAuthorizeURL(scopes));
 });
+
 
 app.get('/callback', (req, res) => {
   const error = req.query.error;
@@ -93,72 +96,80 @@ app.listen(8888, () =>
   )
 );
 
+function getRequest(options) {
+  return new Promise((resolve, reject) => {
+    request(options, (error, response, html) => {
+      if (error || response.statusCode !== 200) {
+        reject(error);
+      } else {
+        resolve(html);
+      }
+    });
+  });
+}
 
-// Now you can use the initSpotifyToken function in this file
-var AuthParameters = {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded'
-    },
-    body:'grant_type=client_credentials&client_id=' + SPOTIFY_CLIENT_ID + '&client_secret=' + SPOTIFY_CLIENT_SECRET
+async function halfRequest(rym_list_url) {
+  rym_list_url = rym_list_url.replace(/\s+/g, "");
+
+  if (/^(www\.)?rateyourmusic\.com\/list/.test(rym_list_url)){
+    rym_list_url = "https://" + rym_list_url;
   }
-  
- let accessToken = null
 
-  async function initSpotifyToken(){ 
-    try {
-        accessToken = await fetch('https://accounts.spotify.com/api/token', AuthParameters)
-        .then(results => results.json())
-        .then(data => {
-            spotifyApi.setAccessToken(data.access_token)
-            return data.access_token
-        })
-        return accessToken
-    } catch (error) {
-        console.log(error)   
-    }
- }
+  if (/\/list\/[^\/]+\/[^\/]+\/\d+(\/)?$/.test(rym_list_url)){
+    rym_list_url = rym_list_url.replace(/\/\d+\/?$/, '/');
+  }
 
-initSpotifyToken();
+  if (!/\/$/.test(rym_list_url)){
+    rym_list_url += '/'
+  }
 
-RYM_URL = "https://rateyourmusic.com/list/PsychedelicSquirrel/good-indie/"
-if (/^(www\.)?rateyourmusic\.com\/list/.test(RYM_URL)){
-    RYM_URL = "https://" + RYM_URL;
-}
+  if (!/^((https:\/\/)(www.)?rateyourmusic\.com\/list\/[^\/]+\/[^\/]+(\/)?)$/.test(rym_list_url)) {
+      //update error
+      throw new Error("Input URL must start with https://rateyourmusic.com/list\n This was yours: " + rym_list_url);
+  }
 
-if (!/^(https:\/\/)?(www.)?rateyourmusic\.com\/list/.test(RYM_URL)) {
-    throw new Error("Input URL must start with https://rateyourmusic.com/list");
-}
-
-const options = {
-    url: RYM_URL,
-    headers: {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36'
-    }
-};
-
-async function halfRequest() {
-    return new Promise((resolve, reject) => {
-      request(options, async (error, response, html) => {
-        if (error || response.statusCode !== 200) {
-          console.log(response.statusCode);
-          reject(error);
-        } else {
+  const options = {
+      url: rym_list_url,
+      headers: {
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/50.0.2661.102 Safari/537.36'
+      }
+  };
+    return new Promise(async (resolve, reject) => {
+      let pageNum = 1;
+      let songsOrAlbums = [];
+      let playlist_name
+      let playlist_description
+      while (true) {
+        try {
+          options.url = options.url + pageNum + '/';
+          const html = await getRequest(options);
           const $ = cheerio.load(html);
+          if(pageNum == 1){
+            playlist_name = $('h1[style="font-size:2.1em"]').text();
+            playlist_description = (($('p[style="font-size:1.6em"]').text()).replace(/\n/g, ' ')).replace(/ +/g, ' ') + ' || ' + ($("#content > div.row > div.large-8.columns > span").text()).replace(/\n/g, ' ').replace(/ +/g, ' ');
+            if(playlist_description.length > 300){
+              playlist_description = playlist_description.slice(0, 300)
+            }
+          }
           const userTable = $('#user_list');
           const allRows = userTable.find('.trodd, .treven');
-          const songsOrAlbums = [];
-  
+          if (!allRows.length && pageNum != 1) {
+            options.url = options.url.replace(/\/\d+\/?$/, '/');
+            break;
+          } else if (!allRows.length && pageNum == 1) {
+            throw new Error('User table not found');
+          }
           for (let elem of allRows) {
             var artists = $(elem).find('.list_artist').text();
             var albumOrSingleName = $(elem).find('.list_album').text();
             var releaseDate = $(elem).find('.rel_date').text();
             var data;
             var type;
+            
             if(artists != '' || albumOrSingleName != '' || releaseDate != ''){
                 if(albumOrSingleName != '' && releaseDate != ''){
-                    if (/((Video)|(Bootleg)|(Unauthorized)|(DJ\ Mix))/.test(releaseDate)){
-                        type = 'Video/Bootleg/Unauthorized/DJ Mix'
+                    if (/((Video)|(Bootleg)|(Unauthorized)|(DJ\ Mix)|(Compilation))/.test(releaseDate)){
+                        type = 'Video/Bootleg/Unauthorized/DJ Mix/Compilation'
                         continue
                     //if it is a Single
                     } if (/Single/.test(releaseDate)) {
@@ -205,9 +216,18 @@ async function halfRequest() {
                 })
             }
           };
-          resolve(songsOrAlbums);
+          options.url = options.url.replace(/\/\d+\/?$/, '/');
+          pageNum++;
+        } catch (error) {
+          console.log(error);
+          throw error;
         }
-      });
+      }
+          resolve({
+            name: playlist_name,
+            description: playlist_description,
+            songsOrAlbums: songsOrAlbums
+          });
     });
   }
 
@@ -215,50 +235,53 @@ async function halfRequest() {
 async function fullRequest() {
     excluded = [];
     updatedSongsAlbumsArtists = [];
-    songsOrAlbums = await halfRequest();
-    console.log(util.inspect(songsOrAlbums, false, null, true));
-    await createPlaylist(songsOrAlbums)
+    List = await halfRequest(RYM_URL);
+    //console.log(util.inspect(songsOrAlbums, false, null, true));
+    await createPlaylist(List.songsOrAlbums, List.name, List.description)
+    console.log(List.songsOrAlbums.length)
 }
 
-async function createPlaylist(songsOrAlbums){
-  console.log(songsOrAlbums)
-  let result = await spotifyApi.createPlaylist('Good indie')
+async function createPlaylist(songsOrAlbums, playlistName, playlistDescription = 'Added by Han from RYM2Spotify', isPublic = false){
+  let result = await spotifyApi.createPlaylist(playlistName, {'description': playlistDescription, 'public': isPublic})
   // console.log(result)
   // get the playlist id from the result
   let playlistId = result.body.id
-  console.log(playlistId)
   for (let thing of songsOrAlbums){
-    console.log("======================")
-    console.log(thing)
-    if(thing.type == 'EP' || thing.type == 'Album'| thing.type == 'Mixtape'){
+    // console.log(thing)
+    if((thing.type == 'EP' || thing.type == 'Album'|| thing.type == 'Mixtape') && thing.data.spotifyObjects.length > 0){
       let albumobject = await spotifyApi.getAlbumTracks(thing.data.spotifyObjects[0].albumId)
       //deduce albumtracks
       let albumtracks = []
       for(let album_track of albumobject.body.items){
         albumtracks.push("spotify:track:" + album_track.id)
       }
-      console.log(albumtracks)
+      // console.log(albumtracks)
       await spotifyApi.addTracksToPlaylist(playlistId, albumtracks)
     } else if (thing.type == 'Single') {
       let singletracks = []
       for(let track of thing.data){
-        singletracks.push("spotify:track:" + track.spotifyObjects[0].trackId)
+        if (track.spotifyObjects.length > 0){
+          singletracks.push("spotify:track:" + track.spotifyObjects[0].trackId)
+        }
       }
-      console.log(singletracks)
+      // console.log(singletracks)
       await spotifyApi.addTracksToPlaylist(playlistId, singletracks)
-    } else if (thing.type == 'artist') {
+    } else if (thing.type == 'artist' && thing.data.spotifyObjects.length > 0) {
       let artisttracks = []
       for(let artist_track of thing.data.spotifyObjects[0].topSongs){
         artisttracks.push("spotify:track:" + artist_track.songId)
       }
-      console.log(artisttracks)
+      // console.log(artisttracks)
       await spotifyApi.addTracksToPlaylist(playlistId, artisttracks)
     }
   }
 }
 
-async function searchAlbums(search_parameter){
-    return spotifyApi.searchAlbums(search_parameter, {limit: 5}).then((result) => {
+async function searchAlbums(query){
+  if (query.length > 100) {
+    query = query.slice(0, 100); // Truncate the string to 100 characters
+  }
+    return spotifyApi.searchAlbums(query, {limit: 5}).then((result) => {
       let return_albums = [];
       for (object of result.body.albums.items){
         let extractArtists = [];
@@ -279,8 +302,11 @@ async function searchAlbums(search_parameter){
     });
 }
 
-async function searchArtistsAndGetTopTracks(search_parameter){
-    return spotifyApi.searchArtists(search_parameter, {limit: 3}).then(async (result) => {
+async function searchArtistsAndGetTopTracks(query){
+  if (query.length > 100) {
+    query = query.slice(0, 100); // Truncate the string to 100 characters
+  }
+    return spotifyApi.searchArtists(query, {limit: 3}).then(async (result) => {
       let return_artist = [];
       for (let currArtist of result.body.artists.items){
         let extractTopFive = await getArtistTopTracks(currArtist.id)
@@ -320,8 +346,12 @@ async function getArtistTopTracks(artistID){
     });
 }
 
-async function searchTracks(search_parameter){
-    return spotifyApi.searchTracks(search_parameter, {limit: 5}).then((result) => {
+//will return tracks object
+async function searchTracks(query){
+  if (query.length > 100) {
+    query = query.slice(0, 100); // Truncate the string to 100 characters
+  }
+    return spotifyApi.searchTracks(query, {limit: 5}).then((result) => {
       let return_tracks = [];
       for (object of result.body.tracks.items){
         let extractArtists = [];
@@ -340,4 +370,32 @@ async function searchTracks(search_parameter){
       }
       return return_tracks;
     });
+}
+
+
+
+// MAYBE UNNECESSARY =============
+
+var AuthParameters = {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/x-www-form-urlencoded'
+  },
+  body:'grant_type=client_credentials&client_id=' + SPOTIFY_CLIENT_ID + '&client_secret=' + SPOTIFY_CLIENT_SECRET
+}
+
+let accessToken = null
+
+async function initSpotifyToken(){ 
+  try {
+      accessToken = await fetch('https://accounts.spotify.com/api/token', AuthParameters)
+      .then(results => results.json())
+      .then(data => {
+          spotifyApi.setAccessToken(data.access_token)
+          return data.access_token
+      })
+      return accessToken
+  } catch (error) {
+      console.log(error)   
+  }
 }
